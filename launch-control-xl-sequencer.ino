@@ -477,9 +477,9 @@ void handleControlChange(byte channel, byte control, byte value) {
                     // Determine which step we should record to
                     int targetStep;
 
-                    // If we're in the first half of the current step period, record to current step
-                    // If we're in the second half, record to the next step
-                    if (timeSinceLastStep < STEP_DURATION / 2) {
+                    // If we're definitely in the current step period, record to current step
+                    // If we're very close to the next step, record to the next step
+                    if (timeSinceLastStep < STEP_DURATION / 1.1) {
                         // Closer to current step
                         targetStep = currentStep;
                     } else {
