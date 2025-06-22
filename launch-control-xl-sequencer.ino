@@ -23,7 +23,8 @@ const int NUM_CHANNELS = 8; // Using TRACK FOCUS buttons for channels
 enum DisplayMode {
     MODE_HOMEPAGE,
     MODE_CHANNEL,
-    MODE_MIXER
+    MODE_MIXER,
+    MODE_RECORD
 };
 
 // Sequencer state
@@ -34,6 +35,14 @@ int currentStep = 0;
 unsigned long lastStepTime = 0;
 unsigned long lastClockTime = 0;
 bool isPlaying = false;
+
+// Recording state
+struct RecordState {
+    bool channelArmed[NUM_CHANNELS];  // Which channels are armed for recording
+    unsigned long lastTapTime[NUM_CHANNELS];  // For visual feedback
+    byte defaultNote[NUM_CHANNELS];  // Default note per channel for recording
+};
+RecordState recordState;
 
 // Note tracking for all channels (for LED blinking)
 struct ChannelNoteState {
@@ -85,6 +94,8 @@ const LedColor COLOR_CHANNEL_ACTIVE = {0, 3};   // Green bright
 const LedColor COLOR_CHANNEL_PLAYING = {3, 3};  // Yellow for note activity
 const LedColor COLOR_MUTED = {3, 0};          // Red for muted channels
 const LedColor COLOR_SOLOED = {0, 3};         // Green for soloed channels
+const LedColor COLOR_RECORD_ARMED = {3, 0};   // Red for armed channels
+const LedColor COLOR_RECORD_TAP = {3, 3};     // Yellow flash on tap
 
 // Note display helpers
 const char* noteNames[] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
@@ -135,6 +146,10 @@ void updateModeLEDs() {
     // MUTE LED shows if we're in mixer mode
     LedColor muteColor = (currentMode == MODE_MIXER) ? ControllerAPI::GREEN() : ControllerAPI::OFF();
     ControllerAPI::setLedColor(CC_MUTE, muteColor);
+
+    // SOLO LED shows if we're in record mode
+    LedColor soloColor = (currentMode == MODE_RECORD) ? ControllerAPI::RED() : ControllerAPI::OFF();
+    ControllerAPI::setLedColor(CC_SOLO, soloColor);
 }
 
 void updateHomepageLEDs() {
@@ -203,6 +218,44 @@ void updateMixerLEDs() {
     }
 }
 
+void updateRecordLEDs() {
+    // Show record-armed channels and tap feedback
+    for (int i = 0; i < NUM_CHANNELS; i++) {
+        LedColor color;
+
+        // Flash feedback for recent taps (100ms flash)
+        unsigned long timeSinceTap = millis() - recordState.lastTapTime[i];
+        if (timeSinceTap < 100) {
+            color = COLOR_RECORD_TAP;  // Yellow flash on tap
+        }
+        // Check if this channel is actively playing a note
+        else if (channelNotes[i].isPlaying) {
+            // Blink to show activity (like in homepage)
+            unsigned long timeSinceNote = millis() - channelNotes[i].noteOnTime;
+            if ((timeSinceNote / 100) % 2 == 0) {
+                color = COLOR_CHANNEL_PLAYING;
+            } else {
+                color = recordState.channelArmed[i] ? COLOR_RECORD_ARMED : COLOR_CHANNEL_INACTIVE;
+            }
+        }
+        // Show armed state
+        else if (recordState.channelArmed[i]) {
+            color = COLOR_RECORD_ARMED;  // Red for armed
+        } else {
+            color = COLOR_CHANNEL_INACTIVE;  // Dim green for unarmed
+        }
+
+        ControllerAPI::setLedColor(TRACK_FOCUS_START_LED + i, color);
+    }
+
+    // Show current step position on TRACK CONTROL row (like a position indicator)
+    for (int i = 0; i < 8; i++) {
+        // Simple step indicator for steps 1-8
+        LedColor color = (i == (currentStep % 8)) ? ControllerAPI::GREEN_LOW() : ControllerAPI::OFF();
+        ControllerAPI::setLedColor(TRACK_CONTROL_START_LED + i, color);
+    }
+}
+
 void updateLEDs() {
     updateModeLEDs();
 
@@ -215,6 +268,9 @@ void updateLEDs() {
             break;
         case MODE_MIXER:
             updateMixerLEDs();
+            break;
+        case MODE_RECORD:
+            updateRecordLEDs();
             break;
     }
 }
@@ -285,16 +341,17 @@ void switchToChannel(int channelIndex) {
 void handleControlChange(byte channel, byte control, byte value) {
     // Mode buttons
     if (control == CC_DEVICE && value > 0) {
-        // Toggle between homepage and channel mode (not mixer mode)
-        if (currentMode == MODE_MIXER) {
-            // Exit mixer mode to homepage
+        // Toggle between homepage and channel mode (not mixer/record mode)
+        if (currentMode == MODE_MIXER || currentMode == MODE_RECORD) {
+            // Exit mixer/record mode to homepage
             currentMode = MODE_HOMEPAGE;
         } else {
             currentMode = (currentMode == MODE_HOMEPAGE) ? MODE_CHANNEL : MODE_HOMEPAGE;
         }
         Serial.print("Mode: ");
         Serial.println(currentMode == MODE_HOMEPAGE ? "HOMEPAGE" :
-                      (currentMode == MODE_CHANNEL ? "CHANNEL" : "MIXER"));
+                      (currentMode == MODE_CHANNEL ? "CHANNEL" :
+                       (currentMode == MODE_MIXER ? "MIXER" : "RECORD")));
         updateLEDs();
     }
     else if (control == CC_MUTE && value > 0) {
@@ -303,6 +360,21 @@ void handleControlChange(byte channel, byte control, byte value) {
         Serial.print("Mode: ");
         Serial.println(currentMode == MODE_MIXER ? "MIXER" :
                       (currentMode == MODE_HOMEPAGE ? "HOMEPAGE" : "CHANNEL"));
+        updateLEDs();
+    }
+    else if (control == CC_SOLO && value > 0) {
+        // Toggle record mode
+        currentMode = (currentMode == MODE_RECORD) ? MODE_HOMEPAGE : MODE_RECORD;
+
+        // Clear armed states when entering record mode
+        if (currentMode == MODE_RECORD) {
+            for (int i = 0; i < NUM_CHANNELS; i++) {
+                recordState.channelArmed[i] = false;
+            }
+            Serial.println("Mode: RECORD - Tap channels to record rhythm!");
+        } else {
+            Serial.println("Mode: HOMEPAGE");
+        }
         updateLEDs();
     }
     // Handle mode-specific controls
@@ -385,6 +457,74 @@ void handleControlChange(byte channel, byte control, byte value) {
                 Serial.print(channelIndex + 1);
                 Serial.print(" solo: ");
                 Serial.println(channels[channelIndex].isSoloed() ? "ON" : "OFF");
+                updateLEDs();
+            }
+        }
+    }
+    else if (currentMode == MODE_RECORD) {
+        // Record mode - real-time pattern recording
+
+        // TRACK FOCUS buttons for recording/arming channels
+        if (control >= TRACK_FOCUS_START_CC && control < TRACK_FOCUS_START_CC + 8) {
+            if (value > 0) {
+                int channelIndex = control - TRACK_FOCUS_START_CC;
+
+                if (isPlaying) {
+                    // Calculate the closest step for quantization
+                    unsigned long currentTime = millis();
+                    unsigned long timeSinceLastStep = currentTime - lastStepTime;
+
+                    // Determine which step we should record to
+                    int targetStep;
+
+                    // If we're in the first half of the current step period, record to current step
+                    // If we're in the second half, record to the next step
+                    if (timeSinceLastStep < STEP_DURATION / 2) {
+                        // Closer to current step
+                        targetStep = currentStep;
+                    } else {
+                        // Closer to next step
+                        targetStep = (currentStep + 1) % NUM_STEPS;
+                    }
+
+                    // Always activate the step (no toggle, just turn on)
+                    channels[channelIndex].setStepActive(targetStep, true);
+
+                    // Use default note for this channel
+                    channels[channelIndex].setStepNote(targetStep, recordState.defaultNote[channelIndex]);
+
+                    // Visual feedback
+                    recordState.lastTapTime[channelIndex] = millis();
+
+                    Serial.print("RECORDED: Ch");
+                    Serial.print(channelIndex + 1);
+                    Serial.print(" Step ");
+                    Serial.print(targetStep + 1);
+                    Serial.print(" - ");
+                    Serial.print(noteNames[recordState.defaultNote[channelIndex] % 12]);
+                    Serial.print((recordState.defaultNote[channelIndex] / 12) - 1);
+                    Serial.print(" (quantized from ");
+                    Serial.print(timeSinceLastStep);
+                    Serial.println("ms)");
+                } else {
+                    // When not playing, toggle armed state
+                    recordState.channelArmed[channelIndex] = !recordState.channelArmed[channelIndex];
+                    Serial.print("Channel ");
+                    Serial.print(channelIndex + 1);
+                    Serial.print(" armed: ");
+                    Serial.println(recordState.channelArmed[channelIndex] ? "YES" : "NO");
+                }
+
+                updateLEDs();
+            }
+        }
+        // TRACK CONTROL buttons could be used for clearing in record mode
+        else if (control >= TRACK_CONTROL_START_CC && control < TRACK_CONTROL_START_CC + 8) {
+            if (value > 0) {
+                int channelIndex = control - TRACK_CONTROL_START_CC;
+                channels[channelIndex].clearPattern();
+                Serial.print("Cleared channel ");
+                Serial.println(channelIndex + 1);
                 updateLEDs();
             }
         }
@@ -520,6 +660,14 @@ void setup() {
         channelNotes[i].isPlaying = false;
         channelNotes[i].noteOnTime = 0;
         channelNotes[i].currentNote = 0;
+
+        // Initialize record state
+        recordState.channelArmed[i] = false;
+        recordState.lastTapTime[i] = 0;
+        // Set default notes for each channel (drum map style)
+        // Channel 1: Kick (C1), Channel 2: Snare (D1), etc.
+        // Or just use middle C for all
+        recordState.defaultNote[i] = 60; // Middle C for all channels
     }
 
     // Initialize all APIs
@@ -541,7 +689,12 @@ void setup() {
     Serial.println("\nControls:");
     Serial.println("- DEVICE: Toggle between Homepage and Channel view");
     Serial.println("- MUTE: Enter/exit Mixer mode");
+    Serial.println("- SOLO: Enter/exit Record mode");
     Serial.println("- Homepage: Press TRACK FOCUS buttons to select channels");
+    Serial.println("- Record mode:");
+    Serial.println("  - While playing: Tap TRACK FOCUS to record beats (quantized)");
+    Serial.println("  - While stopped: Toggle channel armed status");
+    Serial.println("  - TRACK CONTROL: Clear channel patterns");
     Serial.println("- Mixer mode:");
     Serial.println("  - TRACK FOCUS: Mute channels");
     Serial.println("  - TRACK CONTROL: Solo channels");
@@ -560,9 +713,11 @@ void loop() {
 
     processSequencer();
 
-    // Update homepage LEDs for blinking effect
+    // Update LEDs for modes that need continuous updates
     if (currentMode == MODE_HOMEPAGE) {
-        updateHomepageLEDs();
+        updateHomepageLEDs();  // For blinking channel activity
+    } else if (currentMode == MODE_RECORD) {
+        updateRecordLEDs();    // For position indicator and tap feedback
     }
 
     yield();
