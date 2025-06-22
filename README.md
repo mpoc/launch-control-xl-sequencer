@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-This project implements a multi-channel hardware MIDI sequencer using a Teensy 4.1 microcontroller as the brain and a Novation Launch Control XL as the primary user interface. The sequencer features 8 independent channels, each capable of generating 16-step patterns, with three distinct modes: a homepage view for channel overview, individual channel editing modes, and a mixer mode for mute/solo control. The system acts as a bridge between hardware MIDI devices and computer software, capable of generating and routing MIDI messages through multiple interfaces simultaneously.
+This project implements a multi-channel hardware MIDI sequencer using a Teensy 4.1 microcontroller as the brain and a Novation Launch Control XL as the primary user interface. The sequencer features 8 independent channels, each capable of generating 16-step patterns, with three distinct modes: a homepage view for channel overview, individual channel editing modes, and a mixer mode for mute/solo control. The system acts as a bridge between hardware MIDI devices and computer software, capable of generating and routing MIDI messages through multiple interfaces simultaneously, with full MIDI clock sync capabilities.
 
 ## Hardware Setup
 
@@ -122,7 +122,11 @@ The implementation provides 8 independent sequencer channels, each with 16 steps
 
 #### Transport Controls (All Modes)
 - **UP button**: Play/Pause sequencer
+  - Sends MIDI Start (0xFA) when starting from step 1
+  - Sends MIDI Continue (0xFB) when resuming from other steps
+  - Sends MIDI Stop (0xFC) when pausing
 - **DOWN button**: Reset to step 1
+  - Sends MIDI Stop followed by MIDI Start if playing
 - **LEFT button**: Clear all steps (Channel mode only)
 - **RIGHT button**: Fill all steps (Channel mode only)
 
@@ -147,6 +151,7 @@ The implementation provides 8 independent sequencer channels, each with 16 steps
 - **MIDI Channel Assignment**: Channels 1-8 use MIDI channels 1-8
 - **Per-Channel Patterns**: Each channel maintains its own 16-step sequence
 - **Mute/Solo System**: Professional mixer-style channel control
+- **MIDI Clock Master**: Acts as sync source for external devices
 
 #### Timing
 - Fixed tempo: 120 BPM
@@ -154,13 +159,19 @@ The implementation provides 8 independent sequencer channels, each with 16 steps
 - Gate duration: 50% of step length
 - Non-blocking timing using `millis()`
 
-### MIDI Output
-The sequencer sends MIDI note messages simultaneously to:
+### MIDI Output & Sync
+The sequencer sends MIDI messages simultaneously to:
 - USB MIDI (for DAW/computer software)
 - Hardware MIDI out (for synthesizers/drum machines)
 - Each channel outputs on its own MIDI channel (1-8)
 - Proper note-off handling prevents stuck notes
 - Mute/solo states affect MIDI output in real-time
+
+#### MIDI Clock Sync
+- **Master Clock**: Outputs MIDI Clock at 24 ppq (pulses per quarter note)
+- **Transport Sync**: Sends standard MIDI Start/Stop/Continue messages
+- **Tempo**: Fixed at 120 BPM with accurate timing
+- **External Sync**: DAWs and devices can follow the sequencer's transport
 
 ## Code Structure
 
@@ -183,6 +194,7 @@ The sequencer sends MIDI note messages simultaneously to:
 5. **Clear Abstractions**: Logical separation between transport, pattern, and note control
 6. **Mode-Based UI**: Three distinct modes for different workflows
 7. **Professional Features**: Mixer-style mute/solo follows industry standards
+8. **MIDI Sync**: Full clock and transport sync for integration with other MIDI gear
 
 ## Usage Guide
 
@@ -210,3 +222,5 @@ The sequencer sends MIDI note messages simultaneously to:
 - Transport controls work in all modes for quick access
 - Solo overrides mute - when any channel is soloed, only soloed channels play
 - Mixer changes take effect immediately, even during playback
+- Use as MIDI master clock to sync external devices and DAWs
+- MIDI Start/Stop/Continue messages allow seamless integration with other gear

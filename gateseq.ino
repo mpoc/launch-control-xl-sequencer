@@ -15,6 +15,7 @@
 // Sequencer configuration
 const int BPM = 120;
 const unsigned long STEP_DURATION = 60000 / (BPM * 4); // 16th notes at given BPM
+const unsigned long CLOCK_DURATION = 60000 / (BPM * 24); // 24 ppq MIDI clock
 const int NUM_STEPS = 16;
 const int NUM_CHANNELS = 8; // Using TRACK FOCUS buttons for channels
 
@@ -31,6 +32,7 @@ int currentChannel = 0;
 DisplayMode currentMode = MODE_HOMEPAGE;
 int currentStep = 0;
 unsigned long lastStepTime = 0;
+unsigned long lastClockTime = 0;
 bool isPlaying = false;
 
 // Note tracking for all channels (for LED blinking)
@@ -66,6 +68,12 @@ const byte CC_UP = 44;
 const byte CC_DOWN = 45;
 const byte CC_LEFT = 46;
 const byte CC_RIGHT = 47;
+
+// MIDI Real-Time messages
+const byte MIDI_CLOCK = 0xF8;
+const byte MIDI_START = 0xFA;
+const byte MIDI_CONTINUE = 0xFB;
+const byte MIDI_STOP = 0xFC;
 
 // LED colors for different states
 const LedColor COLOR_STEP_OFF = {0, 0};      // Off
@@ -389,23 +397,53 @@ void handleControlChange(byte channel, byte control, byte value) {
 
         if (isPlaying) {
             lastStepTime = millis();
+            lastClockTime = millis();
+
+            // Send MIDI Start if we're at step 0, Continue otherwise
+            if (currentStep == 0) {
+                USBMidiAPI::sendRealTime(MIDI_START);
+                HardwareMidiAPI::sendRealTime(MIDI_START);
+                Serial.println("Sent MIDI Start");
+            } else {
+                USBMidiAPI::sendRealTime(MIDI_CONTINUE);
+                HardwareMidiAPI::sendRealTime(MIDI_CONTINUE);
+                Serial.println("Sent MIDI Continue");
+            }
+
             // Play current step for all channels
             for (int i = 0; i < NUM_CHANNELS; i++) {
                 playNoteForStep(i, currentStep);
             }
         } else {
             stopAllNotes();
+
+            // Send MIDI Stop
+            USBMidiAPI::sendRealTime(MIDI_STOP);
+            HardwareMidiAPI::sendRealTime(MIDI_STOP);
+            Serial.println("Sent MIDI Stop");
         }
 
         updateTransportLEDs();
     }
     else if (control == CC_DOWN && value > 0) {
         stopAllNotes();
+
+        // Send MIDI Stop first
+        USBMidiAPI::sendRealTime(MIDI_STOP);
+        HardwareMidiAPI::sendRealTime(MIDI_STOP);
+
         currentStep = 0;
-        Serial.println("Reset to step 1");
+        Serial.println("Reset to step 1 - Sent MIDI Stop");
 
         if (isPlaying) {
             lastStepTime = millis();
+            lastClockTime = millis();
+
+            // Send MIDI Start since we're restarting from beginning
+            USBMidiAPI::sendRealTime(MIDI_START);
+            HardwareMidiAPI::sendRealTime(MIDI_START);
+            Serial.println("Sent MIDI Start (reset while playing)");
+
             for (int i = 0; i < NUM_CHANNELS; i++) {
                 playNoteForStep(i, 0);
             }
@@ -431,6 +469,13 @@ void processSequencer() {
     if (!isPlaying) return;
 
     unsigned long currentTime = millis();
+
+    // Send MIDI clock pulses (24 ppq)
+    if (currentTime - lastClockTime >= CLOCK_DURATION) {
+        lastClockTime = currentTime;
+        USBMidiAPI::sendRealTime(MIDI_CLOCK);
+        HardwareMidiAPI::sendRealTime(MIDI_CLOCK);
+    }
 
     // Handle note off timing (simple gate - half step duration)
     for (int i = 0; i < NUM_CHANNELS; i++) {
@@ -462,7 +507,7 @@ void processSequencer() {
 
 void setup() {
     Serial.begin(115200);
-    Serial.println("Multi-Channel 16-Step Sequencer with Mixer");
+    Serial.println("Multi-Channel 16-Step Sequencer with Mixer & MIDI Sync");
 
     delay(2000);
     Serial.println("Starting in 2 seconds...");
@@ -490,6 +535,7 @@ void setup() {
     updateTransportLEDs();
 
     lastStepTime = millis();
+    lastClockTime = millis();
 
     Serial.println("Multi-channel sequencer ready!");
     Serial.println("\nControls:");
@@ -501,6 +547,9 @@ void setup() {
     Serial.println("  - TRACK CONTROL: Solo channels");
     Serial.println("- Channel view: Edit patterns as before");
     Serial.println("- Transport controls work in all modes");
+    Serial.println("\nMIDI Sync:");
+    Serial.println("- Sends MIDI Start/Stop/Continue messages");
+    Serial.println("- Outputs MIDI Clock at 24 ppq");
     Serial.println("\nStarting in Homepage mode");
 }
 
