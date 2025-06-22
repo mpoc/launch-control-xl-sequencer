@@ -1,8 +1,8 @@
-# Teensy 4.1 MIDI Sequencer Project
+# Teensy 4.1 Multi-Channel MIDI Sequencer Project
 
 ## Project Overview
 
-This project implements a hardware MIDI sequencer using a Teensy 4.1 microcontroller as the brain and a Novation Launch Control XL as the primary user interface. The sequencer acts as a bridge between hardware MIDI devices and computer software, capable of generating and routing MIDI messages through multiple interfaces simultaneously.
+This project implements a multi-channel hardware MIDI sequencer using a Teensy 4.1 microcontroller as the brain and a Novation Launch Control XL as the primary user interface. The sequencer features 8 independent channels, each capable of generating 16-step patterns, with a homepage view for channel overview and individual channel editing modes. The system acts as a bridge between hardware MIDI devices and computer software, capable of generating and routing MIDI messages through multiple interfaces simultaneously.
 
 ## Hardware Setup
 
@@ -47,7 +47,7 @@ The codebase is organized into clean, modular APIs for different communication i
    - Encapsulates a single sequencer channel
    - Stores step data (active state, note values, velocity)
    - Provides pattern manipulation methods
-   - Designed for easy multi-channel expansion
+   - Supports 8 independent channels
 
 ### Launch Control XL Mapping
 
@@ -69,42 +69,74 @@ Based on the provided mapping data, the controller layout is:
 
 ## Current Implementation
 
-### Basic 16-Step Gate Sequencer
+### Multi-Channel 16-Step Gate Sequencer
 
-The current implementation provides a single-channel, 16-step gate sequencer with the following features:
+The implementation provides 8 independent sequencer channels, each with 16 steps, featuring two display modes:
 
-#### Step Control
+#### Display Modes
+
+1. **Homepage Mode**
+   - Overview of all 8 channels displayed on TRACK FOCUS buttons
+   - LED states:
+     - Green (low): Inactive channel
+     - Green (bright): Currently selected channel
+     - Yellow (blinking): Channel actively playing a note
+   - Press any TRACK FOCUS button to enter that channel
+
+2. **Channel Mode**
+   - Detailed view of the selected channel's 16-step pattern
+   - Same step control interface as original implementation
+   - Hold MUTE + press TRACK FOCUS button to quick-switch channels
+
+#### Mode Navigation
+- **DEVICE button**: Toggle between Homepage and Channel modes
+- DEVICE LED indicates current mode (bright = homepage, dim = channel)
+- MUTE LED lights when held (for channel switching)
+
+#### Step Control (Channel Mode)
 - **Steps 1-8**: TRACK FOCUS buttons (bottom row)
 - **Steps 9-16**: TRACK CONTROL buttons (top row)
 - Press buttons to toggle steps on/off
 
-#### Note Control
-- **Steps 1-8 notes**: PAN/DEVICE knobs (CC 16-23)
-- **Steps 9-16 notes**: SEND A knobs (CC 0-7)
+#### Note Control (Channel Mode)
+- **Steps 1-8 notes**: SEND A knobs (CC 0-7)
+- **Steps 9-16 notes**: SEND B knobs (CC 8-15)
 - Note range: C2 to C6 (MIDI notes 36-84)
 
-#### Transport Controls
+#### Transport Controls (Both Modes)
 - **UP button**: Play/Pause sequencer
 - **DOWN button**: Reset to step 1
-- **LEFT button**: Clear all steps
-- **RIGHT button**: Fill all steps
+- **LEFT button**: Clear all steps (Channel mode only)
+- **RIGHT button**: Fill all steps (Channel mode only)
 
 #### Visual Feedback
-- **Inactive steps**: LED off
-- **Active steps**: Green (low intensity)
-- **Current step (inactive)**: Red (low intensity)
-- **Current step (active)**: Yellow (bright)
+- **Homepage Mode**:
+  - Channel LEDs blink on note activity (100ms cycle)
+  - Selected channel shows brighter green
+- **Channel Mode**:
+  - Inactive steps: LED off
+  - Active steps: Green (low intensity)
+  - Current step (inactive): Red (low intensity)
+  - Current step (active): Yellow (bright)
 - **Play indicator**: UP button LED (green when playing)
+
+#### Multi-Channel Features
+- **8 Independent Channels**: Each with unique patterns
+- **Simultaneous Playback**: All channels play together
+- **MIDI Channel Assignment**: Channels 1-8 use MIDI channels 1-8
+- **Per-Channel Patterns**: Each channel maintains its own 16-step sequence
 
 #### Timing
 - Fixed tempo: 120 BPM
 - Resolution: 16th notes
+- Gate duration: 50% of step length
 - Non-blocking timing using `millis()`
 
 ### MIDI Output
 The sequencer sends MIDI note messages simultaneously to:
 - USB MIDI (for DAW/computer software)
 - Hardware MIDI out (for synthesizers/drum machines)
+- Each channel outputs on its own MIDI channel (1-8)
 - Proper note-off handling prevents stuck notes
 
 ## Code Structure
@@ -116,64 +148,33 @@ The sequencer sends MIDI note messages simultaneously to:
 ├── MidiTypes.h           # Common MIDI data structures
 ├── SequencerChannel.h    # Channel abstraction
 ├── MidiRouter.h          # Message routing (currently unused)
-└── basic-sequencer.ino   # Main sequencer implementation
+└── gateseq-v2.ino        # Multi-channel sequencer implementation
 ```
 
 ## Design Principles
 
 1. **Modularity**: Each component has a clean API interface
-2. **Extensibility**: Channel-based architecture supports future multi-channel implementation
+2. **Extensibility**: Channel-based architecture with 8 independent channels
 3. **Decoupling**: Buttons, LEDs, and sequencer logic are independent
 4. **Real-time Performance**: Non-blocking code suitable for tight timing
 5. **Clear Abstractions**: Logical separation between transport, pattern, and note control
+6. **Mode-Based UI**: Homepage for overview, Channel mode for detailed editing
 
-## Future Development Paths
+## Usage Guide
 
-The modular architecture supports many potential enhancements:
+### Getting Started
+1. Power on - sequencer starts in Homepage mode
+2. Press any TRACK FOCUS button to select a channel
+3. In Channel mode, use buttons to create patterns and knobs to set notes
+4. Press UP to start playback
 
-### Multi-Channel Support
-- Multiple independent sequencer channels
-- Channel selection/viewing modes
-- Per-channel mute/solo
-- Channel mixing/routing
+### Channel Management
+- **Homepage**: Quick overview and channel selection
+- **Channel Switching**: DEVICE button or MUTE + TRACK FOCUS combo
+- **Pattern Creation**: Each channel stores its own 16-step pattern
+- **Multi-Channel Playback**: All active channels play simultaneously
 
-### Enhanced Sequencing
-- Variable sequence lengths
-- Pattern banks/storage
-- Swing/shuffle timing
-- Note velocity control (using SEND B knobs)
-- Gate length control
-- Ratcheting/subdivisions
-
-### Advanced Features
-- Scale quantization
-- Probability/random steps
-- Parameter locks
-- Pattern chaining
-- MIDI clock sync
-- External MIDI input processing
-
-### UI Enhancements
-- Multiple view modes
-- Visual metronome
-- Pattern visualization across all LEDs
-- Settings/configuration mode
-
-## Technical Notes
-
-- The project requires Teensy-specific features (USB Host, multiple serial ports)
-- A 2-second startup delay prevents programming issues
-- LED control uses manufacturer-specific SysEx messages
-- The USB Host library creates global objects that must be in the main scope
-- Serial1 must be defined before including certain headers
-
-## Development Environment
-
-- Platform: Arduino IDE with Teensyduino
-- Board: Teensy 4.1
-- Required Libraries:
-  - USBHost_t36 (Teensy USB Host)
-  - MIDI Library (FortySevenEffects)
-  - Core Teensy libraries
-
-This documentation represents the project state as of the basic 16-step sequencer implementation. The architecture has been designed with future expansion in mind, making it straightforward to add channels, features, and complexity while maintaining clean, understandable code.
+### Tips
+- Homepage LEDs blink to show channel activity
+- Each channel outputs on a different MIDI channel for multi-timbral use
+- Transport controls work in both modes for quick access
