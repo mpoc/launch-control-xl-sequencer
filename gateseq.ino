@@ -10,131 +10,260 @@
 #include "MidiRouter.h"
 #include "MidiTypes.h"
 #include "ControllerAPI.h"
+#include "SequencerChannel.h"
 
-// Flag to control note triggering - should be set by your actual logic
-bool shouldPlayNote = false;
-unsigned long noteTimer = 0;
+// Sequencer configuration
+const int BPM = 100;
+const unsigned long STEP_DURATION = 60000 / (BPM * 4); // 16th notes at given BPM
+const int NUM_STEPS = 16;
 
-// LED blink pattern variables
-const unsigned long BLINK_INTERVAL = 1000; // 1 second between color changes
-unsigned long lastBlinkTime = 0;
-bool redPhase = true;  // Toggle between red and green
+// Sequencer state
+SequencerChannel channel1(0, 1); // Channel 0, MIDI channel 1
+int currentStep = 0;
+unsigned long lastStepTime = 0;
+bool isPlaying = false;
+byte currentPlayingNote = 0;
+bool noteIsPlaying = false;
+
+// Knob to note mapping
+// PAN_DEVICE knobs (CC 16-23) control notes for steps 1-8
+// SEND_A knobs (CC 0-7) control notes for steps 9-16
+const byte PAN_DEVICE_START_CC = 16;
+const byte SEND_A_START_CC = 0;
+
+// Button to step mapping
+const byte TRACK_FOCUS_START_CC = 24;
+const byte TRACK_CONTROL_START_CC = 32;
+
+// LED indices
+const byte TRACK_FOCUS_START_LED = 24;
+const byte TRACK_CONTROL_START_LED = 32;
+
+// Transport button CCs
+const byte CC_UP = 44;
+const byte CC_DOWN = 45;
+const byte CC_LEFT = 46;
+const byte CC_RIGHT = 47;
+
+// LED colors for different states
+const LedColor COLOR_STEP_OFF = {0, 0};      // Off
+const LedColor COLOR_STEP_ON = {0, 1};       // Green low
+const LedColor COLOR_CURRENT_OFF = {1, 0};   // Red low
+const LedColor COLOR_CURRENT_ON = {3, 3};    // Yellow (current + active)
+
+// Note display helpers
+const char* noteNames[] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
+
+void printNoteInfo(int step, byte noteValue) {
+    int octave = (noteValue / 12) - 1;
+    int noteIndex = noteValue % 12;
+    Serial.print("Step ");
+    Serial.print(step + 1);
+    Serial.print(" note: ");
+    Serial.print(noteNames[noteIndex]);
+    Serial.print(octave);
+    Serial.print(" (");
+    Serial.print(noteValue);
+    Serial.println(")");
+}
+
+void updateStepLEDs() {
+    for (int i = 0; i < NUM_STEPS; i++) {
+        LedColor color;
+
+        // Determine color based on step state and current position
+        if (i == currentStep) {
+            color = channel1.isStepActive(i) ? COLOR_CURRENT_ON : COLOR_CURRENT_OFF;
+        } else {
+            color = channel1.isStepActive(i) ? COLOR_STEP_ON : COLOR_STEP_OFF;
+        }
+
+        // Calculate LED index
+        byte ledIndex;
+        if (i < 8) {
+            ledIndex = TRACK_FOCUS_START_LED + i;
+        } else {
+            ledIndex = TRACK_CONTROL_START_LED + (i - 8);
+        }
+
+        ControllerAPI::setLedColor(ledIndex, color);
+    }
+}
+
+void updateTransportLEDs() {
+    LedColor transportColor = isPlaying ? ControllerAPI::GREEN() : ControllerAPI::RED_LOW();
+    ControllerAPI::setLedColor(44, transportColor);
+}
+
+void playNoteForStep(int stepIndex) {
+    if (channel1.isMuted()) return;
+
+    const StepData& step = channel1.getStep(stepIndex);
+    if (step.active) {
+        currentPlayingNote = step.note;
+        USBMidiAPI::sendNoteOn(currentPlayingNote, step.velocity, channel1.getMidiChannel());
+        HardwareMidiAPI::sendNoteOn(currentPlayingNote, step.velocity, channel1.getMidiChannel());
+        noteIsPlaying = true;
+
+        Serial.print("Step ");
+        Serial.print(stepIndex + 1);
+        Serial.print(" - NOTE ON: ");
+        Serial.print(noteNames[currentPlayingNote % 12]);
+        Serial.print((currentPlayingNote / 12) - 1);
+        Serial.print(" vel:");
+        Serial.println(step.velocity);
+    }
+}
+
+void stopCurrentNote() {
+    if (noteIsPlaying) {
+        USBMidiAPI::sendNoteOff(currentPlayingNote, 0, channel1.getMidiChannel());
+        HardwareMidiAPI::sendNoteOff(currentPlayingNote, 0, channel1.getMidiChannel());
+        noteIsPlaying = false;
+    }
+}
 
 void handleControlChange(byte channel, byte control, byte value) {
-    // Process control change from controller
-    Serial.print("CC: ");
-    Serial.print(control);
-    Serial.print(", Value: ");
-    Serial.println(value);
+    // Handle knobs for note values
+    if (control >= PAN_DEVICE_START_CC && control < PAN_DEVICE_START_CC + 8) {
+        // PAN_DEVICE knobs control steps 1-8
+        int stepIndex = control - PAN_DEVICE_START_CC;
+        byte noteValue = map(value, 0, 127, 36, 84); // Map to C2-C6 range
+        channel1.setStepNote(stepIndex, noteValue);
+        printNoteInfo(stepIndex, noteValue);
+    }
+    else if (control >= SEND_A_START_CC && control < SEND_A_START_CC + 8) {
+        // SEND_A knobs control steps 9-16
+        int stepIndex = (control - SEND_A_START_CC) + 8;
+        byte noteValue = map(value, 0, 127, 36, 84); // Map to C2-C6 range
+        channel1.setStepNote(stepIndex, noteValue);
+        printNoteInfo(stepIndex, noteValue);
+    }
+    // Handle buttons for step on/off
+    else if (control >= TRACK_FOCUS_START_CC && control < TRACK_FOCUS_START_CC + 8) {
+        if (value > 0) { // Only on button press
+            int stepIndex = control - TRACK_FOCUS_START_CC;
+            channel1.toggleStep(stepIndex);
+            Serial.print("Toggle step ");
+            Serial.print(stepIndex + 1);
+            Serial.print(" to ");
+            Serial.println(channel1.isStepActive(stepIndex) ? "ON" : "OFF");
+            updateStepLEDs();
+        }
+    }
+    else if (control >= TRACK_CONTROL_START_CC && control < TRACK_CONTROL_START_CC + 8) {
+        if (value > 0) { // Only on button press
+            int stepIndex = (control - TRACK_CONTROL_START_CC) + 8;
+            channel1.toggleStep(stepIndex);
+            Serial.print("Toggle step ");
+            Serial.print(stepIndex + 1);
+            Serial.print(" to ");
+            Serial.println(channel1.isStepActive(stepIndex) ? "ON" : "OFF");
+            updateStepLEDs();
+        }
+    }
+    // Transport controls
+    else if (control == CC_UP && value > 0) {
+        // Play/Pause
+        isPlaying = !isPlaying;
+        Serial.println(isPlaying ? "Sequencer PLAYING" : "Sequencer STOPPED");
+
+        if (isPlaying) {
+            playNoteForStep(currentStep);
+            lastStepTime = millis();
+        } else {
+            stopCurrentNote();
+        }
+
+        updateTransportLEDs();
+    }
+    else if (control == CC_DOWN && value > 0) {
+        // Reset to step 0
+        stopCurrentNote();
+        currentStep = 0;
+        Serial.println("Reset to step 1");
+
+        if (isPlaying) {
+            playNoteForStep(0);
+            lastStepTime = millis();
+        }
+
+        updateStepLEDs();
+    }
+    else if (control == CC_LEFT && value > 0) {
+        // Clear all steps
+        channel1.clearPattern();
+        Serial.println("Cleared all steps");
+        updateStepLEDs();
+    }
+    else if (control == CC_RIGHT && value > 0) {
+        // Fill all steps
+        channel1.fillPattern();
+        Serial.println("Filled all steps");
+        updateStepLEDs();
+    }
+}
+
+void processSequencer() {
+    if (!isPlaying) return;
+
+    unsigned long currentTime = millis();
+
+    if (currentTime - lastStepTime >= STEP_DURATION) {
+        lastStepTime = currentTime;
+
+        // Stop current note
+        stopCurrentNote();
+
+        // Move to next step
+        currentStep = (currentStep + 1) % NUM_STEPS;
+
+        // Play new note if step is active
+        playNoteForStep(currentStep);
+
+        // Update display
+        updateStepLEDs();
+    }
 }
 
 void setup() {
-    // Initialize serial for debugging
     Serial.begin(115200);
-    Serial.println("Testing Controller API");
+    Serial.println("Modular 16-Step Sequencer");
 
-    // Critical fix: Add a startup delay to allow time for programming
-    delay(2000);  // 2 second delay before initializing USB host
-    Serial.println("Starting controller in 2 seconds...");
+    delay(2000);
+    Serial.println("Starting in 2 seconds...");
 
-    // Initialize the controller
+    // Initialize all APIs
     ControllerAPI::begin();
+    USBMidiAPI::begin();
+    HardwareMidiAPI::begin();
 
-    // Set up callback for control changes
+    // Set up callbacks
     ControllerAPI::setHandleControlChange(handleControlChange);
 
-    // Initialize blink pattern timing
-    lastBlinkTime = millis();
-}
+    // Initialize display
+    updateStepLEDs();
+    updateTransportLEDs();
 
-void updateBlinkPattern() {
-    unsigned long currentTime = millis();
+    lastStepTime = millis();
 
-    // Check if it's time to update the blink pattern
-    if (currentTime - lastBlinkTime >= BLINK_INTERVAL) {
-        lastBlinkTime = currentTime;
-
-        // Toggle between red and green
-        redPhase = !redPhase;
-        LedColor color = redPhase ? ControllerAPI::RED() : ControllerAPI::GREEN();
-
-        Serial.print("LED Phase: ");
-        Serial.println(redPhase ? "RED" : "GREEN");
-
-        // Update all controller LEDs - covers all 48 LEDs on the Launch Control XL
-
-        // SEND_A knobs (top row) - LEDs 0-7
-        for (int i = 0; i < 8; i++) {
-            ControllerAPI::setLedColor(i, color);
-        }
-
-        // SEND_B knobs (row 3) - LEDs 8-15
-        for (int i = 8; i < 16; i++) {
-            ControllerAPI::setLedColor(i, color);
-        }
-
-        // PAN_DEVICE knobs (row 2) - LEDs 16-23
-        for (int i = 16; i < 24; i++) {
-            ControllerAPI::setLedColor(i, color);
-        }
-
-        // TRACK_FOCUS buttons (bottom row) - LEDs 24-31
-        for (int i = 24; i < 32; i++) {
-            ControllerAPI::setLedColor(i, color);
-        }
-
-        // TRACK_CONTROL buttons (row 4) - LEDs 32-39
-        for (int i = 32; i < 40; i++) {
-            ControllerAPI::setLedColor(i, color);
-        }
-
-        // Mode buttons - LEDs 40-43
-        // DEVICE, MUTE, SOLO, RECORD_ARM
-        for (int i = 40; i < 44; i++) {
-            ControllerAPI::setLedColor(i, color);
-        }
-
-        // Transport buttons - LEDs 44-47
-        // UP, DOWN, LEFT, RIGHT
-        for (int i = 44; i < 48; i++) {
-            ControllerAPI::setLedColor(i, color);
-        }
-    }
+    Serial.println("Sequencer ready!");
+    Serial.println("Controls:");
+    Serial.println("- TRACK FOCUS/CONTROL buttons: Toggle steps on/off");
+    Serial.println("- PAN/DEVICE knobs: Set note for steps 1-8");
+    Serial.println("- SEND A knobs: Set note for steps 9-16");
+    Serial.println("- UP: Play/Pause");
+    Serial.println("- DOWN: Reset to step 1");
+    Serial.println("- LEFT: Clear pattern");
+    Serial.println("- RIGHT: Fill pattern");
 }
 
 void loop() {
-    // Process controller updates
     ControllerAPI::update();
+    USBMidiAPI::read();
+    HardwareMidiAPI::read();
 
-    // Unified timing for both LED blinking and MIDI note test
-    unsigned long currentTime = millis();
-    if (currentTime > noteTimer) {
-        // Toggle both note state and LED colors
-        shouldPlayNote = !shouldPlayNote;
-        redPhase = shouldPlayNote; // Synchronize color phase with note (red when note is on)
+    processSequencer();
 
-        // Set LED color based on note state
-        LedColor color = shouldPlayNote ? ControllerAPI::RED() : ControllerAPI::GREEN();
-
-        Serial.print("LED Phase: ");
-        Serial.println(shouldPlayNote ? "RED (Note ON)" : "GREEN (Note OFF)");
-
-        // Send MIDI note based on toggled state
-        if (shouldPlayNote) {
-            USBMidiAPI::sendNoteOn(60, 127, 1);  // Send middle C with full velocity on channel 1
-        } else {
-            USBMidiAPI::sendNoteOff(60, 0, 1);   // Turn off middle C
-        }
-
-        // Update all LEDs
-        for (int i = 0; i < 48; i++) {
-            ControllerAPI::setLedColor(i, color);
-        }
-
-        // Set next update time
-        noteTimer = currentTime + BLINK_INTERVAL;
-    }
-
-    // Allow other system processes to run if needed
     yield();
 }
