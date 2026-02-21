@@ -5,6 +5,11 @@
 #include "USBHost_t36.h"
 #include "MidiTypes.h"
 
+// Launch Control XL LED capabilities:
+//   LED indices 0-39  (knobs, TRACK FOCUS, TRACK CONTROL): red + green (can mix to yellow/amber)
+//   LED indices 40-43 (DEVICE, MUTE, SOLO, RECORD ARM):   green only
+//   LED indices 44-47 (UP, DOWN, LEFT, RIGHT):             red only
+//
 // Colors for Launch Control XL LEDs
 struct LedColor {
     byte red;    // 0-3

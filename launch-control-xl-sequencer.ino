@@ -148,7 +148,7 @@ void updateModeLEDs() {
     ControllerAPI::setLedColor(CC_MUTE, muteColor);
 
     // SOLO LED shows if we're in record mode
-    LedColor soloColor = (currentMode == MODE_RECORD) ? ControllerAPI::RED() : ControllerAPI::OFF();
+    LedColor soloColor = (currentMode == MODE_RECORD) ? ControllerAPI::GREEN() : ControllerAPI::OFF();
     ControllerAPI::setLedColor(CC_SOLO, soloColor);
 }
 
@@ -276,7 +276,7 @@ void updateLEDs() {
 }
 
 void updateTransportLEDs() {
-    LedColor transportColor = isPlaying ? ControllerAPI::GREEN() : ControllerAPI::RED_LOW();
+    LedColor transportColor = isPlaying ? ControllerAPI::RED() : ControllerAPI::OFF();
     ControllerAPI::setLedColor(CC_UP, transportColor);
 }
 
