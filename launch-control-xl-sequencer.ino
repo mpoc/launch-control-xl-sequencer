@@ -30,7 +30,7 @@ enum DisplayMode {
 // Sequencer state
 SequencerChannel channels[NUM_CHANNELS]; // Array of channels
 int currentChannel = 0;
-DisplayMode currentMode = MODE_HOMEPAGE;
+DisplayMode currentMode = MODE_CHANNEL;
 int currentStep = 0;
 unsigned long lastStepTime = 0;
 unsigned long lastClockTime = 0;
