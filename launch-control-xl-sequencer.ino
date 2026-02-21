@@ -633,8 +633,13 @@ void setup() {
     Serial.begin(115200);
     Serial.println("Multi-Channel 16-Step Sequencer with Mixer & MIDI Sync");
 
-    delay(6000);
-    Serial.println("Starting in 6 seconds...");
+    // Initialize all APIs
+    ControllerAPI::begin();
+    USBMidiAPI::begin();
+    HardwareMidiAPI::begin();
+
+    Serial.println("Starting in 2 seconds...");
+    delay(2000);
 
     // Initialize channels with unique MIDI channels
     for (int i = 0; i < NUM_CHANNELS; i++) {
@@ -652,11 +657,6 @@ void setup() {
         // Or just use middle C for all
         recordState.defaultNote[i] = 60; // Middle C for all channels
     }
-
-    // Initialize all APIs
-    ControllerAPI::begin();
-    USBMidiAPI::begin();
-    HardwareMidiAPI::begin();
 
     // Set up callbacks
     ControllerAPI::setHandleControlChange(handleControlChange);
