@@ -32,11 +32,17 @@ static MIDIDevice controllerMidi(controllerUsbHost);
 
 // Simplified interface for Launch Control XL MIDI controller
 class ControllerAPI {
+private:
+    static const int MAX_LEDS = 48;
+    static byte ledCache[MAX_LEDS];  // Cached color bytes, 0xFF = uninitialized
+
 public:
     // Initialize controller communication
     static void begin() {
         // Initialize USB host for controller
         controllerUsbHost.begin();
+        // Initialize LED cache to uninitialized
+        memset(ledCache, 0xFF, sizeof(ledCache));
     }
 
     // Process USB host tasks
@@ -48,7 +54,11 @@ public:
 
     // Set LED color on controller (0-63 for Launch Control XL)
     static void setLedColor(byte ledIndex, LedColor color) {
+        if (ledIndex >= MAX_LEDS) return;
         byte colorByte = color.red + (color.green << 4);
+        // Skip if LED already has this color
+        if (ledCache[ledIndex] == colorByte) return;
+        ledCache[ledIndex] = colorByte;
         byte templateIndex = 0;
         byte sysexData[] = {0xF0, 0x00, 0x20, 0x29, 0x02, 0x11, 0x78, templateIndex, ledIndex, colorByte, 0xF7};
         controllerMidi.sendSysEx(11, sysexData, true);
@@ -76,5 +86,8 @@ public:
     static const LedColor& YELLOW() { return LED_YELLOW; }
     static const LedColor& AMBER() { return LED_AMBER; }
 };
+
+// Static member definition
+byte ControllerAPI::ledCache[ControllerAPI::MAX_LEDS];
 
 #endif
