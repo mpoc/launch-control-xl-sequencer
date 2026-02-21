@@ -633,8 +633,8 @@ void setup() {
     Serial.begin(115200);
     Serial.println("Multi-Channel 16-Step Sequencer with Mixer & MIDI Sync");
 
-    delay(2000);
-    Serial.println("Starting in 2 seconds...");
+    delay(3000);
+    Serial.println("Starting in 3 seconds...");
 
     // Initialize channels with unique MIDI channels
     for (int i = 0; i < NUM_CHANNELS; i++) {
